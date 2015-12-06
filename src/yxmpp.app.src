@@ -1,0 +1,12 @@
+{application, yxmpp,
+ [
+  {description, "yxmpp"},
+  {vsn, "3.0"},
+  {id, "yxmpp"},
+  {modules,      []},
+  {registered,   []},
+  {applications, [kernel, stdlib ]},
+%  {mod, {, []}},
+  {env, [
+  ]} %%env
+]}. %%application

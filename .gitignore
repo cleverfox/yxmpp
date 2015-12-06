@@ -1,0 +1,7 @@
+ebin/*
+log/*.log
+log/*.log.*
+*~
+deps/*
+.rebar
+_src
