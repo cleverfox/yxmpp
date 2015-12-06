@@ -13,15 +13,27 @@
          muc/1, 
          message/2,
          private_message/2,
+         presence_msg/2,
          presence/0,
          presence_subscribed/1]).
 
 -include("xmpp.hrl").
 
 %% @doc send online status to all
+presence_msg(Type, Message) ->
+    % xml data structure
+    XmlData = [{'presence', [], [
+                                 {'priority', ["50"]}, 
+                                 {'show', [atom_to_list(Type)]}, 
+                                 {'status', [Message]}
+                                ]
+               }],
+    % convert to xml
+    lists:flatten(xmerl:export_simple(XmlData, xmerl_xml, [{prolog, ""}])).
+
 presence() ->
     % xml data structure
-    XmlData = [{'presence', [{'priority', '50'}, {'show', 'chat'}, {'status', 'Hello, from Ybot'}], []}],
+    XmlData = [{'presence', [{'priority', '50'}, {'show', 'chat'}, {'status', 'Hello, from yxmpp'}], []}],
     % convert to xml
     lists:flatten(xmerl:export_simple(XmlData, xmerl_xml, [{prolog, ""}])).
 

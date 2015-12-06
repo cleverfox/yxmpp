@@ -11,7 +11,7 @@
 -include("xmpp.hrl").
 -include_lib("xmerl/include/xmerl.hrl").
 
--export([start_link/10]).
+-export([start_link/3,start_link/4]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -56,40 +56,45 @@
 %%% API
 %%%=============================================================================
 
-start_link(CallbackModule, Login, Password, Server, Port, Room, Nick, Resource, SocketMode, ReconnectTimeout) ->
-    gen_server:start_link(?MODULE, [CallbackModule, Login, Password, Server, Port, Room, Nick, Resource, SocketMode, ReconnectTimeout], []).
+start_link(CallbackModule, Login, Password) ->
+    start_link(CallbackModule, Login, Password,[]).
+start_link(CallbackModule, Login, Password, Options) when is_list(Options) ->
+    gen_server:start_link(?MODULE, [CallbackModule, Login, Password, Options], []).
 
 %%%=============================================================================
 %%% xmpp_client callbacks
 %%%=============================================================================
 
-init([CallbackModule, Login, Password, Server, Port, Room, Nick, Resource, SocketMode, ReconnectTimeout ]) ->
+init([CallbackModule, Login, Password, Options ]) ->
     % try to connect
-    gen_server:cast(self(), {connect, Server, Port}),
+    gen_server:cast(self(), connect),
     % init process internal state
-    {ok, #state{callback = CallbackModule,
-                login = Login,
-                password = Password,
-                host = Server,
-                room = Room,
-                nick = Nick,
-                resource = Resource,
-                port = Port,
-                socket_mod = SocketMode,
-                reconnect_timeout = ReconnectTimeout,
-                cur_mod = case SocketMode of
-                              ssl -> ssl;
-                              gen_tcp -> gen_tcp;
-                              tls -> gen_tcp
-                          end
-               }
+    [Nick, Server] = binary:split(Login,<<"@">>),
+    SocketMode=proplists:get_value(port, Options, tls),
+    {ok, #state{
+            callback = CallbackModule,
+            login = Login,
+            password = Password,
+            host = proplists:get_value(server, Options, Server),
+            room = proplists:get_value(room, Options, undefined),
+            nick = proplists:get_value(nick, Options, Nick),
+            resource = proplists:get_value(resource, Options, <<"yxmpp">>),
+            port = proplists:get_value(port, Options, 5222),
+            socket_mod = SocketMode,
+            reconnect_timeout = proplists:get_value(reconnect_timeout, Options, 5000),
+            cur_mod = case SocketMode of
+                          ssl -> ssl;
+                          gen_tcp -> gen_tcp;
+                          tls -> gen_tcp
+                      end
+           }
     }.
 
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
 %% @doc connect to jabber server
-handle_cast({connect, Host, Port}, State) ->
+handle_cast(connect, #state{host = Host, port = Port} = State) ->
     % Connection options
     Options = case State#state.socket_mod of
                              ssl -> 
@@ -126,6 +131,11 @@ handle_cast({send_message, From, Message}, State) ->
     end,
     
     % return
+    {noreply, State};
+
+handle_cast({status, Type, Message}, State) ->
+    Msg=xmpp_xml:presence_msg(Type, Message),
+    (State#state.cur_mod):send(State#state.socket, Msg),
     {noreply, State};
 
 handle_cast(_Msg, State) ->
@@ -170,10 +180,24 @@ handle_info({_, _, "<message " ++ Rest}, State) ->
 
 %% @doc Handle incoming XMPP message
 handle_info({_, _Socket, Data}, State) ->
-    lager:info("recv ~p ~p",[self(),Data]),
+    lager:debug("recv ~p ~p",[self(),Data]),
     case State#state.success of
         true ->
-            {noreply, State};
+%            try 
+%                case xmerl_scan:string(Data) of
+%                    {Element1,_Rest} ->
+%                        case element(2,Element1) of
+%                            presence -> 
+%                                lager:info("presence ~p",[element(8,Element1)]),
+%                                ok;
+%                            _ -> ok
+%                        end;
+%                    _ -> ok
+%                end,
+%                {noreply, State}
+%            catch _:_ ->
+                      {noreply, State};
+%            end;
         false ->
             case parse_data(Data) of
                 success ->
@@ -246,7 +270,7 @@ send_message_to_handler(Xml, Callback, IncomingMessage) ->
             % Get From parameter
             [{_,_,_,_, _, _, _, _, From, _}] = xmerl_xpath:string("/message/@from", Xml),
             % Send private message to callback
-            lager:info("~p Got msg from ~p: ~p",[self(),From,IncomingMessage]),
+            lager:debug("~p Got msg from ~p: ~p",[self(),From,IncomingMessage]),
             Callback ! {incoming_message, From, IncomingMessage}
     end,
     % return
@@ -281,15 +305,18 @@ neg_session(Socket, State) ->
     NewStream = lists:last(string:tokens(binary_to_list(State#state.login), "@")),
     % handshake with jabber server
     (State#state.cur_mod):send(Socket, ?STREAM(NewStream)),
-    lager:info("Recv ~p",[(State#state.cur_mod):recv(Socket,0)]),
-    lager:info("Recv ~p",[(State#state.cur_mod):recv(Socket,0)]),
+    D1=(State#state.cur_mod):recv(Socket,0),
+    D2=(State#state.cur_mod):recv(Socket,0),
+    lager:debug("Recv ~p",[D1]),
+    lager:debug("Recv ~p",[D2]),
     % Format login/password
     case {State#state.socket_mod,State#state.cur_mod} of
         {tls, gen_tcp} -> 
             (State#state.cur_mod):send(Socket, 
                                        <<"<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls' />">>
                                       ),
-            lager:info("Recv ~p",[(State#state.cur_mod):recv(Socket,0)]),
+            DC=(State#state.cur_mod):recv(Socket,0),
+            lager:debug("Recv ~p",[DC]),
             case ssl:connect(Socket,[{verify,0}],1000) of
                 {ok, NewFD}  ->
                     ssl:setopts(NewFD, [{active, true}]),
